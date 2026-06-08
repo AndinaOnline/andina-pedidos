@@ -35,26 +35,26 @@ html, body, [class*="css"] {{
 
 /* Header bar */
 .andina-header {{
-    background: {COLORS['negro']};
-    color: {COLORS['rosa_palido']};
+    background: {COLORS['arena']};
+    color: {COLORS['negro']};
     padding: 14px 24px;
     border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 24px;
+    border: 0.5px solid #c9b8a8;
 }}
 .andina-logo {{
     font-size: 26px;
     font-style: italic;
-    color: {COLORS['arena']};
+    color: {COLORS['negro']};
     letter-spacing: 1px;
 }}
 .andina-subtitle {{
-    font-size: 12px;
-    color: {COLORS['arena']};
-    opacity: 0.7;
-    letter-spacing: 1.5px;
+    font-size: 11px;
+    color: {COLORS['gris_texto']};
+    letter-spacing: 2px;
     text-transform: uppercase;
 }}
 
@@ -298,7 +298,7 @@ def render_header(subtitle="Sistema de Pedidos"):
             <div class="andina-subtitle">Tienda de Tesoros</div>
         </div>
         <div style="text-align:right;">
-            <div style="font-size:13px; color:{COLORS['arena']}; font-family:'Raleway';">{subtitle}</div>
+            <div style="font-size:13px; color:{COLORS['gris_texto']}; font-family:'Raleway';">{subtitle}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
