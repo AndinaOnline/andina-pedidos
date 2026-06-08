@@ -45,11 +45,10 @@ def load_orders(file) -> pd.DataFrame:
     return df[['fecha','sku','qty']].dropna(subset=['fecha','sku'])
 
 
-@st.cache_data(show_spinner=False)
 def load_inventory(file) -> pd.DataFrame:
     """Load WooCommerce product export CSV."""
     try:
-        df = pd.read_csv(file)
+        df = pd.read_csv(file, low_memory=False)
     except Exception:
         df = pd.read_excel(file)
     
@@ -69,14 +68,26 @@ def load_inventory(file) -> pd.DataFrame:
         elif 'categoría' in cl or 'category' in cl: col_map[c] = 'Categoria'
     df = df.rename(columns=col_map)
     
+    def safe_numeric(series, fill=0):
+        """Convert to numeric safely, handling lists, dicts, mixed types."""
+        return pd.to_numeric(series.astype(str).str.extract(r'([-\d.]+)', expand=False), errors='coerce').fillna(fill)
+    
     if 'Inventario' in df.columns:
-        df['Inventario'] = pd.to_numeric(df['Inventario'], errors='coerce').fillna(0)
+        df['Inventario'] = safe_numeric(df['Inventario'], fill=0)
+    else:
+        df['Inventario'] = 0
     if 'Publicado' in df.columns:
-        df['Publicado'] = pd.to_numeric(df['Publicado'], errors='coerce')
+        df['Publicado'] = safe_numeric(df['Publicado'], fill=0)
+    else:
+        df['Publicado'] = 0
     if 'Precio_normal' in df.columns:
-        df['Precio_normal'] = pd.to_numeric(df['Precio_normal'], errors='coerce')
+        df['Precio_normal'] = safe_numeric(df['Precio_normal'], fill=0).replace(0, float('nan'))
+    else:
+        df['Precio_normal'] = float('nan')
     if 'Precio_rebajado' in df.columns:
-        df['Precio_rebajado'] = pd.to_numeric(df['Precio_rebajado'], errors='coerce')
+        df['Precio_rebajado'] = safe_numeric(df['Precio_rebajado'], fill=0).replace(0, float('nan'))
+    else:
+        df['Precio_rebajado'] = float('nan')
     
     # Estado
     def get_estado(r):
