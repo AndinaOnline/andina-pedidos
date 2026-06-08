@@ -216,20 +216,20 @@ with tabs[0]:
               </div>
               <div style="display:flex; gap:20px; margin-bottom:12px; padding-bottom:12px; border-bottom:0.5px solid {COLORS['arena']};">
                 <div>
-                  <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:{COLORS['gris_texto']};">{mo_name} {yr-1}</div>
-                  <div style="font-size:18px; font-weight:500; font-family:'Raleway'; color:{COLORS['gris_texto']};">{prev_yr_val}u</div>
+                  <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:{COLORS['gris_texto']};">{month_names_full[mo]} {yr-1}</div>
+                  <div style="font-size:18px; font-weight:500; font-family:Raleway; color:{COLORS['gris_texto']};">{prev_yr_val}u</div>
                 </div>
                 <div>
                   <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:{COLORS['gris_texto']};">Prom últ. 3 meses</div>
-                  <div style="font-size:18px; font-weight:500; font-family:'Raleway'; color:{COLORS['negro']};">{prom_3m}u</div>
+                  <div style="font-size:18px; font-weight:500; font-family:Raleway; color:{COLORS['negro']};">{prom_3m}u</div>
                 </div>
                 <div>
                   <div style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:{COLORS['gris_texto']};">Tend. YoY</div>
-                  <div style="font-size:18px; font-weight:500; font-family:'Raleway'; color:#155724;">+35%</div>
+                  <div style="font-size:18px; font-weight:500; font-family:Raleway; color:#155724;">+35%</div>
                 </div>
               </div>
             </div>
-            """.replace('mo_name', month_names_full[mo]), unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
             
             new_val = st.number_input(
                 f"Tu estimado {month_names_full[mo]} (sugerido: {suggested}u)",
