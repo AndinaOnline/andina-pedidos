@@ -54,19 +54,39 @@ def load_inventory(file) -> pd.DataFrame:
     
     df.columns = df.columns.str.strip()
     
-    # Normalize columns
-    col_map = {}
-    for c in df.columns:
-        cl = c.lower()
-        if cl == 'sku': col_map[c] = 'SKU'
-        elif 'nombre' in cl or 'name' in cl: col_map[c] = 'Nombre'
-        elif 'inventario' in cl or 'stock' in cl: col_map[c] = 'Inventario'
-        elif 'publicado' in cl: col_map[c] = 'Publicado'
-        elif 'precio normal' in cl or 'regular price' in cl: col_map[c] = 'Precio_normal'
-        elif 'rebajado' in cl or 'sale price' in cl: col_map[c] = 'Precio_rebajado'
-        elif 'imagen' in cl or 'image' in cl: col_map[c] = 'Imagen'
-        elif 'categoría' in cl or 'category' in cl: col_map[c] = 'Categoria'
-    df = df.rename(columns=col_map)
+    # Normalize columns — collision-safe (exactly ONE source column per target).
+    # The previous greedy substring matching mapped several source columns to the
+    # same target (e.g. "Inventario", "¿En inventario?" and "Cantidad de bajo
+    # inventario" all contain "inventario"), leaving duplicate-named columns.
+    # Duplicate columns make df.apply(..., axis=1) return a Series instead of a
+    # scalar, which raised "truth value of a Series is ambiguous" downstream.
+    specs = [
+        # target,          exact names (lowercased),                          substring fallbacks, numeric?
+        ('SKU',            ['sku'],                                            ['sku'],             False),
+        ('Nombre',         ['nombre', 'name', 'nombre del producto'],          ['nombre', 'name'],  False),
+        ('Inventario',     ['inventario', 'stock'],                            ['inventario', 'stock'], True),
+        ('Publicado',      ['publicado', 'published'],                         ['publicado'],       True),
+        ('Precio_normal',  ['precio normal', 'regular price'],                 ['precio normal'],   True),
+        ('Precio_rebajado',['precio rebajado', 'sale price'],                  ['rebajado', 'sale price'], True),
+        ('Imagen',         ['imágenes', 'imagenes', 'images', 'imagen', 'image'], ['imagen', 'image'], False),
+        ('Categoria',      ['categorías', 'categorias', 'categories', 'categoría', 'category'], ['categor'], False),
+    ]
+    def _parse_score(col):
+        s = df[col].astype(str).str.extract(r'([-\d.]+)', expand=False)
+        return pd.to_numeric(s, errors='coerce').notna().sum()
+    rename_map, used = {}, set()
+    for target, exact, contains, numeric in specs:
+        cands = [c for c in df.columns if c not in used and c.lower().strip() in exact]
+        if not cands:
+            cands = [c for c in df.columns if c not in used and any(t in c.lower() for t in contains)]
+        if not cands:
+            continue
+        best = max(cands, key=_parse_score) if (numeric and len(cands) > 1) else cands[0]
+        rename_map[best] = target
+        used.add(best)
+    df = df.rename(columns=rename_map)
+    # Hard guard: collapse any remaining duplicate-named columns (keep first).
+    df = df.loc[:, ~df.columns.duplicated()]
     
     def safe_numeric(series, fill=0):
         """Convert to numeric safely, handling duplicate columns and mixed types."""
@@ -100,17 +120,23 @@ def load_inventory(file) -> pd.DataFrame:
         df['Precio_rebajado'] = float('nan')
     
     # Estado
+    def _scalar(v, default=None):
+        if isinstance(v, pd.Series):
+            v = v.iloc[0] if len(v) else default
+        return v
     def get_estado(r):
-        has_rebajado = pd.notna(r.get('Precio_rebajado')) and r.get('Precio_rebajado', 0) > 0
-        if has_rebajado: return 'SALE'
-        if r.get('Publicado') == 1: return 'Activo'
+        reb = _scalar(r.get('Precio_rebajado'))
+        pub = _scalar(r.get('Publicado'), 0)
+        if pd.notna(reb) and (reb or 0) > 0: return 'SALE'
+        if pub == 1: return 'Activo'
         return 'Borrador'
     df['Estado'] = df.apply(get_estado, axis=1)
     
     # Image URL — first URL from comma-separated list
     if 'Imagen' in df.columns:
-        df['Imagen_url'] = df['Imagen'].astype(str).apply(
-            lambda x: x.split(',')[0].strip() if x and x != 'nan' else '')
+        df['Imagen_url'] = df['Imagen'].apply(
+            lambda x: str(x).split(',')[0].strip()
+            if pd.notna(x) and str(x).strip() not in ('', 'nan') else '')
     else:
         df['Imagen_url'] = ''
     

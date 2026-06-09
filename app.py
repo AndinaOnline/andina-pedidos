@@ -61,7 +61,7 @@ with tabs[0]:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown('<p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#5D6364;">📦 Productos WooCommerce (CSV)</p>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#606060;">📦 Productos WooCommerce (CSV)</p>', unsafe_allow_html=True)
         inv_file = st.file_uploader("Productos", type=['csv','xlsx'], label_visibility="collapsed", key="inv_upload")
         if inv_file:
             st.session_state['inv_df'] = load_inventory(inv_file)
@@ -72,7 +72,7 @@ with tabs[0]:
             st.markdown('<div class="upload-pending">Subí el export de WooCommerce (Productos → Exportar)</div>', unsafe_allow_html=True)
     
     with col2:
-        st.markdown('<p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#5D6364;">🧾 Ventas del mes (XLSX)</p>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#606060;">🧾 Ventas del mes (XLSX)</p>', unsafe_allow_html=True)
         ord_file = st.file_uploader("Ventas", type=['xlsx','csv'], label_visibility="collapsed", key="ord_upload")
         if ord_file:
             new_orders = load_orders(ord_file)
@@ -90,7 +90,7 @@ with tabs[0]:
             st.markdown('<div class="upload-pending">Subí el export de pedidos de WooCommerce</div>', unsafe_allow_html=True)
     
     with col3:
-        st.markdown('<p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#5D6364;">💰 Costos proveedoras (XLSX)</p>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#606060;">💰 Costos proveedoras (XLSX)</p>', unsafe_allow_html=True)
         cost_file = st.file_uploader("Costos", type=['xlsx','csv'], label_visibility="collapsed", key="cost_upload")
         if cost_file:
             st.session_state['costs_df'] = load_costs(cost_file)
@@ -131,7 +131,7 @@ with tabs[0]:
         fig.add_bar(name=f'{months_show[0][0]-1}', x=labels, y=vals_2025,
                     marker_color=COLORS['arena'], opacity=0.7)
         fig.add_bar(name=f'{months_show[0][0]}', x=labels, y=vals_curr,
-                    marker_color='#5D6364')
+                    marker_color='#606060')
         fig.update_layout(
             barmode='group', height=200, margin=dict(l=0,r=0,t=10,b=0),
             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',

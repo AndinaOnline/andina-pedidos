@@ -1,28 +1,27 @@
-# Andina brand colors — exact from web CSS variables
+# Andina brand colors — strictly from Manual de Marca
 COLORS = {
-    "rosa":        "#F9DDDE",   # --rosa: header background
-    "terra":       "#D99352",   # --terra/dorado: accents, buttons
-    "gris":        "#EBE8E6",   # --gris: secondary backgrounds
-    "texto":       "#606060",   # --texto: body text
-    "oscuro":      "#3A3A3A",   # --oscuro: headings
-    "blanco":      "#FAFAF9",   # --fondo: main background
-    "vino":        "#993556",   # --vino: dark accent
-    "rosa_borde":  "#e8c8ca",   # borders on rosa
-    "terra_claro": "#fef3e8",   # light terra for backgrounds
-    # Functional
+    "rosa":        "#F9DDDE",   # primario rosa
+    "terra":       "#D99352",   # secundario ocre/dorado — accent
+    "gris":        "#EBE8E6",   # accesorio para fondos
+    "texto":       "#606060",   # color para textos
+    "oscuro":      "#000000",   # negro 100% — títulos
+    "blanco":      "#FFFFFF",   # fondo principal
+    "rosa_borde":  "#EFD3D4",   # borde suave sobre rosa
+    "terra_claro": "#FBEFE2",   # tinte ocre claro para fondos
+    # Funcionales (semáforo) — fuera de paleta de marca, solo para estados
     "verde_ok":    "#27AE60",
     "rojo_alerta": "#C0392B",
     "naranja":     "#E67E22",
-    "azul":        "#2980B9",    
+    "azul":        "#2980B9",
     "verde_agua":  "#E8F5E9",
     "arena":       "#E0D9D1",
-    "negro":       "#3A3A3A",
+    "negro":       "#000000",
     "gris_texto":  "#606060",
 }
 
 CSS = f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600&family=EB+Garamond:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600&display=swap');
 
 html, body, [class*="css"] {{
     font-family: 'Raleway', sans-serif;
@@ -37,22 +36,18 @@ html, body, [class*="css"] {{
 
 /* ── HEADER ────────────────────────────────────────────────────────── */
 .andina-header {{
-    background: {COLORS['rosa']};
-    border-bottom: 1px solid {COLORS['rosa_borde']};
-    padding: 16px 28px;
+    background: {COLORS['blanco']};
+    border-bottom: 1px solid {COLORS['gris']};
+    padding: 18px 28px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 20px;
-    border-radius: 0 0 8px 8px;
 }}
-.andina-logo-text {{
-    font-family: 'EB Garamond', Georgia, serif;
-    font-size: 28px;
-    color: {COLORS['oscuro']};
-    font-style: italic;
-    letter-spacing: 1px;
-    line-height: 1;
+.andina-logo-img {{
+    height: 46px;
+    width: auto;
+    display: block;
 }}
 .andina-tagline {{
     font-family: 'Raleway', sans-serif;
@@ -91,9 +86,9 @@ html, body, [class*="css"] {{
     transition: all 0.2s;
 }}
 .stTabs [aria-selected="true"] {{
-    background: {COLORS['rosa']} !important;
-    color: {COLORS['oscuro']} !important;
-    border-color: {COLORS['rosa_borde']} !important;
+    background: {COLORS['terra_claro']} !important;
+    color: {COLORS['terra']} !important;
+    border-color: {COLORS['terra']} !important;
     font-weight: 600 !important;
 }}
 
@@ -152,11 +147,11 @@ html, body, [class*="css"] {{
 }}
 .badge-a  {{ background: #e8f5e9; color: #2e7d32; }}
 .badge-b  {{ background: {COLORS['terra_claro']}; color: #7d4e00; }}
-.badge-c  {{ background: {COLORS['rosa']}; color: {COLORS['vino']}; }}
+.badge-c  {{ background: {COLORS['terra_claro']}; color: {COLORS['terra']}; }}
 .badge-d  {{ background: {COLORS['gris']}; color: {COLORS['texto']}; }}
 .badge-activo   {{ background: #e8f5e9; color: #2e7d32; }}
 .badge-nuevo    {{ background: {COLORS['terra_claro']}; color: #7d4e00; }}
-.badge-sale     {{ background: {COLORS['rosa']}; color: {COLORS['vino']}; }}
+.badge-sale     {{ background: {COLORS['rosa']}; color: {COLORS['oscuro']}; }}
 .badge-borrador {{ background: {COLORS['gris']}; color: {COLORS['texto']}; }}
 .badge-baja     {{ background: #fce4ec; color: #880e4f; }}
 
@@ -229,17 +224,27 @@ div[data-testid="stAlert"] {{
 </style>
 """
 
+import os, base64
+
+def _logo_b64():
+    path = os.path.join(os.path.dirname(__file__), 'assets', 'andina_logo.png')
+    try:
+        with open(path, 'rb') as fh:
+            return base64.b64encode(fh.read()).decode()
+    except Exception:
+        return ''
+
 def render_header(subtitle="Sistema de Pedidos"):
     import streamlit as st
     from datetime import datetime
     fecha = datetime.now().strftime('%d/%m/%Y')
+    b64 = _logo_b64()
+    logo_html = (f'<img class="andina-logo-img" src="data:image/png;base64,{b64}" alt="Andina">'
+                 if b64 else '<div style="font-size:24px;color:#D99352;">Andina</div>')
     st.markdown(f"""
     <div class="andina-header">
         <div style="display:flex; align-items:center; gap:16px;">
-            <div>
-                <div class="andina-logo-text">Andina</div>
-                <div class="andina-tagline">Tienda de Tesoros</div>
-            </div>
+            {logo_html}
         </div>
         <div class="andina-header-right">
             <div style="font-weight:500; color:{COLORS['oscuro']};">{subtitle}</div>
