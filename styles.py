@@ -13,7 +13,11 @@ COLORS = {
     "verde_ok":    "#27AE60",
     "rojo_alerta": "#C0392B",
     "naranja":     "#E67E22",
-    "azul":        "#2980B9",
+    "azul":        "#2980B9",    
+    "verde_agua":  "#E8F5E9",
+    "arena":       "#E0D9D1",
+    "negro":       "#3A3A3A",
+    "gris_texto":  "#606060",
 }
 
 CSS = f"""
