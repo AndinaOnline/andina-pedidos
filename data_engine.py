@@ -69,16 +69,18 @@ def load_inventory(file) -> pd.DataFrame:
     df = df.rename(columns=col_map)
     
     def safe_numeric(series, fill=0):
-        """Convert to numeric safely, handling lists, dicts, mixed types."""
-        import re
-        import math
-        def extract_num(val):
-            s = str(val)
-            m = re.search(r'[-\d.]+', s)
-            return float(m.group()) if m else float('nan')
-        values = [extract_num(v) for v in series]
-        cleaned = [fill if math.isnan(v) else v for v in values]
-        return pd.Series(cleaned, index=series.index)
+        """Convert to numeric safely, handling duplicate columns and mixed types."""
+        # If duplicate columns caused a DataFrame, take the first column
+        if isinstance(series, pd.DataFrame):
+            series = series.iloc[:, 0]
+        series = series.astype(str)
+        # First pass: direct numeric conversion
+        result = pd.to_numeric(series, errors='coerce')
+        # Second pass: regex extraction for values that failed
+        if result.isna().any():
+            extracted = series.str.extract(r'([-\d.]+)', expand=False)
+            result = result.fillna(pd.to_numeric(extracted, errors='coerce'))
+        return result.fillna(fill)
     
     if 'Inventario' in df.columns:
         df['Inventario'] = safe_numeric(df['Inventario'], fill=0)
