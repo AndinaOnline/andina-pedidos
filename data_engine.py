@@ -75,7 +75,7 @@ def load_inventory(file) -> pd.DataFrame:
             s = str(val)
             m = re.search(r'[-\d.]+', s)
             return float(m.group()) if m else float('nan')
-                return series.apply(extract_num).fillna(fill)
+        return series.apply(extract_num).fillna(fill)
     
     if 'Inventario' in df.columns:
         df['Inventario'] = safe_numeric(df['Inventario'], fill=0)
