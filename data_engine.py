@@ -71,11 +71,14 @@ def load_inventory(file) -> pd.DataFrame:
     def safe_numeric(series, fill=0):
         """Convert to numeric safely, handling lists, dicts, mixed types."""
         import re
+        import math
         def extract_num(val):
             s = str(val)
             m = re.search(r'[-\d.]+', s)
             return float(m.group()) if m else float('nan')
-        return series.apply(extract_num).fillna(fill)
+        values = [extract_num(v) for v in series]
+        cleaned = [fill if math.isnan(v) else v for v in values]
+        return pd.Series(cleaned, index=series.index)
     
     if 'Inventario' in df.columns:
         df['Inventario'] = safe_numeric(df['Inventario'], fill=0)
