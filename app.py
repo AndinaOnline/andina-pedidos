@@ -28,14 +28,19 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 # ── SESSION STATE ─────────────────────────────────────────────────────────────
 def init_state():
-    # Histórico grabado: se carga siempre desde el archivo del repo.
+    # Histórico: si existe el archivo persistido (meses ya subidos, se acumulan),
+    # se usa ese; si no, el baseline grabado en el repo (hasta may 2026).
     base_orders = None
-    base_path = os.path.join(os.path.dirname(__file__), 'ventas_historico.csv')
-    if os.path.exists(base_path):
-        try:
-            base_orders = pd.read_csv(base_path, parse_dates=['fecha'])
-        except Exception:
-            base_orders = None
+    here = os.path.dirname(__file__)
+    persist_path = os.path.join(here, 'ventas_updates.csv')
+    base_path = os.path.join(here, 'ventas_historico.csv')
+    for p in (persist_path, base_path):
+        if os.path.exists(p):
+            try:
+                base_orders = pd.read_csv(p, parse_dates=['fecha'])
+                break
+            except Exception:
+                base_orders = None
     defaults = {
         'orders_df': base_orders,
         'inv_df': None,
@@ -73,11 +78,29 @@ def _save_plan(plan):
 if not st.session_state.get('forecast_anual'):
     st.session_state['forecast_anual'] = _load_plan()
 
+# ── PERSISTENCIA DE COSTOS (ediciones a mano + historial mensual que NO se borra)
+_COSTS_EDIT_PATH = os.path.join(os.path.dirname(__file__), 'costos_editados.json')
+_COSTS_HIST_PATH = os.path.join(os.path.dirname(__file__), 'costos_historico.csv')
+def _load_edited_costs():
+    try:
+        with open(_COSTS_EDIT_PATH, encoding='utf-8') as f:
+            return {str(k): float(v) for k, v in json.load(f).items()}
+    except Exception:
+        return {}
+def _save_edited_costs(d):
+    try:
+        with open(_COSTS_EDIT_PATH, 'w', encoding='utf-8') as f:
+            json.dump({str(k): float(v) for k, v in d.items()}, f)
+    except Exception:
+        pass
+if not st.session_state.get('edited_costs'):
+    st.session_state['edited_costs'] = _load_edited_costs()
+
 # ── HEADER ────────────────────────────────────────────────────────────────────
 render_header(f"Sistema de Pedidos · {datetime.now().strftime('%d/%m/%Y')}")
 
 # ── TABS ──────────────────────────────────────────────────────────────────────
-tabs = st.tabs(["Inicio", "Análisis", "Pedidos", "Recomendaciones"])
+tabs = st.tabs(["Inicio", "Análisis", "Pedidos", "Recomendaciones", "Precios"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 0 — INICIO
@@ -104,6 +127,12 @@ with tabs[0]:
         if ord_file:
             new_orders = load_orders(ord_file)
             st.session_state['orders_df'] = merge_orders(st.session_state['orders_df'], new_orders)
+            # Persiste el histórico acumulado para que los meses subidos no se pierdan
+            try:
+                _pp = os.path.join(os.path.dirname(__file__), 'ventas_updates.csv')
+                st.session_state['orders_df'].to_csv(_pp, index=False)
+            except Exception:
+                pass
             st.session_state['analysis_df'] = None
             st.markdown(f'<div class="upload-ok">{len(new_orders)} lineas cargadas · histórico actualizado</div>', unsafe_allow_html=True)
         elif st.session_state['orders_df'] is not None:
@@ -131,6 +160,11 @@ with tabs[0]:
     if st.session_state['orders_df'] is not None:
         st.markdown('<div style="height:20px;"></div>', unsafe_allow_html=True)
         section_title("Ventas históricas — últimos 6 meses")
+        if st.session_state['orders_df'] is not None:
+            _hist_csv = st.session_state['orders_df'].to_csv(index=False).encode('utf-8')
+            st.download_button("Descargar histórico acumulado (.csv)", _hist_csv,
+                               file_name="ventas_historico.csv", mime="text/csv",
+                               help="Para grabarlo permanente: subí este archivo al repo reemplazando ventas_historico.csv.")
         
         hist = get_historical_monthly(st.session_state['orders_df'].copy())
         today = datetime.now()
@@ -236,7 +270,8 @@ with tabs[0]:
 
     if today.month > 1:
         cerrados = " · ".join(f"{mes_abbr[m]}: {_u(today.year,m)}u" for m in range(1, today.month))
-        st.markdown(f'<div style="font-size:11px;color:{COLORS["gris_texto"]};font-family:Raleway;margin-bottom:8px;">Meses cerrados {today.year} (reales): {cerrados} &nbsp;&middot;&nbsp; Tendencia YoY acumulada: <strong>{yoy_txt}</strong></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:11px;color:{COLORS["gris_texto"]};font-family:Raleway;margin-bottom:4px;">Meses cerrados {today.year} (reales): {cerrados}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:11px;color:{COLORS["gris_texto"]};font-family:Raleway;margin-bottom:8px;">Sugerido = mismo mes de {today.year-1} × (1 + YoY acumulado ene–{mes_abbr[today.month-1].lower()}). Ese YoY hoy es <strong>{yoy_txt}</strong> y es el % que ves en la columna "Crec. sug.".</div>', unsafe_allow_html=True)
 
     def _crec(val, base):
         return round((val/base - 1)*100, 0) if base > 0 else None
@@ -281,6 +316,25 @@ with tabs[0]:
         _save_plan(plan)   # persiste los ajustes en disco
 
     st.caption("Cargá el plan una vez al año (se guarda). Cada mes solo subís las ventas: se actualiza el histórico y se recalculan los pedidos.")
+
+    # Resumen EN VIVO (se recalcula al editar el plan): total y YoY resultante.
+    try:
+        plan_tot = int(sum(int(edited_plan.iloc[i]['Plan']) for i in range(len(edited_plan))))
+        ap_tot = int(sum(_u(today.year-1, m) for m in range(today.month, 13)))
+        cerr_tot = int(sum(_u(today.year, m) for m in range(1, today.month)))
+        anio_plan = cerr_tot + plan_tot
+        anio_prev = int(sum(_u(today.year-1, m) for m in range(1, 13)))
+        yoy_plan = f"{(anio_plan/anio_prev-1)*100:+.0f}%" if anio_prev > 0 else "sin dato"
+        yoy_resto = f"{(plan_tot/ap_tot-1)*100:+.0f}%" if ap_tot > 0 else "sin dato"
+        st.markdown(
+            f'<div class="andina-card" style="padding:12px 16px;display:flex;gap:30px;flex-wrap:wrap;font-family:Raleway;">'
+            f'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:{COLORS["gris_texto"]};">Plan {mes_abbr[today.month].lower()}–dic</div>'
+            f'<div style="font-size:18px;font-weight:600;color:{COLORS["oscuro"]};">{plan_tot}u <span style="font-size:12px;color:{COLORS["gris_texto"]};">(vs {ap_tot}u {today.year-1} · {yoy_resto})</span></div></div>'
+            f'<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:{COLORS["gris_texto"]};">Año completo {today.year} proyectado</div>'
+            f'<div style="font-size:18px;font-weight:600;color:{COLORS["oscuro"]};">{anio_plan}u <span style="font-size:12px;color:{COLORS["terra"]};">YoY {yoy_plan}</span></div></div>'
+            f'</div>', unsafe_allow_html=True)
+    except Exception:
+        pass
 
     # Totales para el motor: mes en curso y próximo
     mo_next = today.month + 1 if today.month < 12 else 12
@@ -358,10 +412,10 @@ with tabs[1]:
             provs_available = sorted({str(p).strip() for p in adf['Proveedor'].dropna().unique() if str(p).strip()})
             f_prov = st.multiselect("Proveedora", provs_available, default=[])
         with f3:
-            tipos_available = sorted([t for t in adf['Tipo'].unique() if t])
+            tipos_available = sorted({str(t).strip() for t in adf['Tipo'].dropna().unique() if str(t).strip()})
             f_tipo = st.multiselect("Tipo", tipos_available, default=[])
         with f4:
-            estados_available = sorted(adf['Estado'].unique())
+            estados_available = sorted({str(e).strip() for e in adf['Estado'].dropna().unique() if str(e).strip()})
             f_estado = st.multiselect("Estado", estados_available, default=['Activo','SALE'])
         with f5:
             f_alerta = st.multiselect("Alerta", ['Quiebre','Urgente','Próximo'], default=[])
@@ -437,7 +491,7 @@ with tabs[2]:
         
         # Provider selector
         section_title("Seleccioná la proveedora")
-        provs_with_orders = sorted(pedido_skus[pedido_skus['Proveedor'] != '']['Proveedor'].unique())
+        provs_with_orders = sorted({str(p).strip() for p in pedido_skus['Proveedor'].dropna().unique() if str(p).strip()})
         
         if not provs_with_orders:
             st.warning("No hay pedidos propuestos aún. Verificá que los datos estén cargados.")
@@ -618,3 +672,103 @@ with tabs[3]:
             borra_display.columns = ['SKU','Nombre','Tipo','Proveedora','Estado','Inv.','YTD 2026','Antigüedad']
             st.dataframe(borra_display, use_container_width=True, hide_index=True, height=250)
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — PRECIOS PROVEEDORAS
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[4]:
+    section_title("Precios de proveedoras")
+
+    if st.session_state['costs_df'] is None:
+        st.info("Subí el archivo de costos en la pestaña Inicio, o cargá uno acá abajo.")
+
+    # Cargar/actualizar subiendo un archivo nuevo
+    up_cost = st.file_uploader("Actualizar precios subiendo un archivo (XLSX)", type=['xlsx'], key="precios_upload")
+    if up_cost:
+        try:
+            st.session_state['costs_df'] = load_costs(up_cost)
+            st.session_state['analysis_df'] = None
+            st.success(f"{len(st.session_state['costs_df'])} precios cargados.")
+        except Exception as e:
+            st.error("No se pudo leer el archivo de costos.")
+
+    costs_df = st.session_state['costs_df']
+    if costs_df is not None and len(costs_df):
+        edited_costs = st.session_state.get('edited_costs', {})
+
+        # Precio vigente = costo del archivo, sobrescrito por edición manual
+        view = costs_df[['SKU','Proveedor','Nombre_Prov','SKU_Prov','Costo_ARS']].copy()
+        view['Costo_ARS'] = view.apply(
+            lambda r: edited_costs.get(str(r['SKU']), r['Costo_ARS']), axis=1)
+        view = view.rename(columns={
+            'Nombre_Prov': 'Nombre proveedora', 'SKU_Prov': 'SKU proveedora', 'Costo_ARS': 'Costo ARS'})
+
+        st.markdown(f'<div style="font-size:12px;color:{COLORS["gris_texto"]};margin:6px 0;">Editá "Costo ARS" a mano si necesitás. Los cambios se guardan solos.</div>', unsafe_allow_html=True)
+        edited = st.data_editor(
+            view,
+            column_config={
+                'SKU': st.column_config.TextColumn('SKU', disabled=True),
+                'Proveedor': st.column_config.TextColumn('Proveedora', disabled=True),
+                'Nombre proveedora': st.column_config.TextColumn('Nombre proveedora', disabled=True),
+                'SKU proveedora': st.column_config.TextColumn('SKU proveedora', disabled=True),
+                'Costo ARS': st.column_config.NumberColumn('Costo ARS', min_value=0, step=100, format="$%d"),
+            },
+            hide_index=True, use_container_width=True, height=420, key="precios_editor",
+        )
+        # Guardar ediciones manuales (solo las que difieren del archivo)
+        changed = False
+        base_cost = dict(zip(costs_df['SKU'].astype(str), costs_df['Costo_ARS']))
+        for _, r in edited.iterrows():
+            sku = str(r['SKU']); val = r['Costo ARS']
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                continue
+            if float(val) != float(base_cost.get(sku, float('nan')) if pd.notna(base_cost.get(sku)) else -1):
+                if edited_costs.get(sku) != float(val):
+                    edited_costs[sku] = float(val); changed = True
+        if changed:
+            st.session_state['edited_costs'] = edited_costs
+            _save_edited_costs(edited_costs)
+
+        st.divider()
+        section_title("Historial de costos por mes")
+        st.markdown(f'<div style="font-size:12px;color:{COLORS["gris_texto"]};margin-bottom:8px;">Registrá los costos vigentes para dejar la foto del mes. Sirve para calcular la rentabilidad con el costo que aplicaba en cada período. <strong>El historial no se borra.</strong></div>', unsafe_allow_html=True)
+
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            mes_reg = st.text_input("Mes de vigencia (AAAA-MM)", value=datetime.now().strftime('%Y-%m'), key="mes_reg")
+            if st.button("Registrar costos de este mes", type="primary", use_container_width=True):
+                snap = edited.rename(columns={'Costo ARS': 'Costo_ARS', 'Proveedor': 'Proveedora',
+                                              'Nombre proveedora': 'Nombre_Prov', 'SKU proveedora': 'SKU_Prov'})
+                snap = snap[['SKU', 'Proveedora', 'Costo_ARS']].copy()
+                snap.insert(0, 'mes_vigencia', mes_reg)
+                snap.insert(0, 'registrado', datetime.now().strftime('%Y-%m-%d %H:%M'))
+                try:
+                    if os.path.exists(_COSTS_HIST_PATH):
+                        prev = pd.read_csv(_COSTS_HIST_PATH)
+                        # reemplaza el snapshot de ese mes si se vuelve a registrar; conserva el resto
+                        prev = prev[prev['mes_vigencia'].astype(str) != str(mes_reg)]
+                        out = pd.concat([prev, snap], ignore_index=True)
+                    else:
+                        out = snap
+                    out.to_csv(_COSTS_HIST_PATH, index=False)
+                    st.success(f"Costos de {mes_reg} registrados ({len(snap)} SKUs).")
+                except Exception:
+                    st.error("No se pudo registrar el historial.")
+
+        # Mostrar / descargar historial
+        if os.path.exists(_COSTS_HIST_PATH):
+            try:
+                hist = pd.read_csv(_COSTS_HIST_PATH)
+                meses = sorted(hist['mes_vigencia'].astype(str).unique())
+                with col_b:
+                    st.markdown(f'<div style="font-size:12px;color:{COLORS["gris_texto"]};">Meses registrados: <strong>{", ".join(meses)}</strong></div>', unsafe_allow_html=True)
+                    st.download_button("Descargar historial de costos (.csv)",
+                                       hist.to_csv(index=False).encode('utf-8'),
+                                       file_name="costos_historico.csv", mime="text/csv",
+                                       help="Para grabarlo permanente, subilo al repo.")
+                sel = st.selectbox("Ver costos de un mes", meses, index=len(meses)-1, key="hist_mes_sel")
+                st.dataframe(hist[hist['mes_vigencia'].astype(str) == sel][['SKU','Proveedora','Costo_ARS']],
+                             use_container_width=True, hide_index=True, height=300)
+            except Exception:
+                pass
