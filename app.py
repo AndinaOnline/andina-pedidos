@@ -56,6 +56,23 @@ def init_state():
 
 init_state()
 
+# ── PERSISTENCIA DEL PLAN ANUAL (sobrevive entre sesiones del deploy) ──────────
+_PLAN_PATH = os.path.join(os.path.dirname(__file__), 'forecast_plan.json')
+def _load_plan():
+    try:
+        with open(_PLAN_PATH, encoding='utf-8') as f:
+            return {int(k): int(v) for k, v in json.load(f).items()}
+    except Exception:
+        return {}
+def _save_plan(plan):
+    try:
+        with open(_PLAN_PATH, 'w', encoding='utf-8') as f:
+            json.dump({str(k): int(v) for k, v in plan.items()}, f)
+    except Exception:
+        pass
+if not st.session_state.get('forecast_anual'):
+    st.session_state['forecast_anual'] = _load_plan()
+
 # ── HEADER ────────────────────────────────────────────────────────────────────
 render_header(f"Sistema de Pedidos · {datetime.now().strftime('%d/%m/%Y')}")
 
@@ -159,7 +176,8 @@ with tabs[0]:
                 st.markdown(f"""
                 <div style="text-align:center; font-family:'Raleway',sans-serif;">
                   <div style="font-size:10px; color:{COLORS['gris_texto']}; text-transform:uppercase; letter-spacing:0.5px;">{month_names[mo]}</div>
-                  <div style="font-size:15px; font-weight:600; color:{COLORS['negro']};">{v_curr}u</div>
+                  <div style="font-size:16px; font-weight:700; color:{COLORS['oscuro']};">{v_curr}u</div>
+                  <div style="font-size:11px; color:{COLORS['gris_texto']};">{months_show[0][0]-1}: {v_prev}u</div>
                   <div style="font-size:10px; color:{color};">{yoy_str}</div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -209,40 +227,60 @@ with tabs[0]:
             return int(prev*(1+avg_yoy))
         return prev  # sin tendencia: usa año pasado; sin año pasado: 0 (no inventa)
 
-    # Plan anual en sesión: se inicializa UNA vez con los sugeridos (mes actual -> dic).
-    if not st.session_state.get('forecast_anual'):
-        st.session_state['forecast_anual'] = {m: _sugerido(m) for m in range(today.month, 13)}
+    # Plan anual: arranca de lo guardado en disco; completa meses faltantes con sugerido.
+    plan = st.session_state.get('forecast_anual') or {}
+    for m in range(today.month, 13):
+        if m not in plan:
+            plan[m] = _sugerido(m)
+    st.session_state['forecast_anual'] = plan
 
     if today.month > 1:
         cerrados = " · ".join(f"{mes_abbr[m]}: {_u(today.year,m)}u" for m in range(1, today.month))
-        st.markdown(f'<div style="font-size:11px;color:{COLORS["gris_texto"]};font-family:Raleway;margin-bottom:8px;">Meses cerrados {today.year} (reales): {cerrados} &nbsp;&middot;&nbsp; Tendencia YoY: <strong>{yoy_txt}</strong></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:11px;color:{COLORS["gris_texto"]};font-family:Raleway;margin-bottom:8px;">Meses cerrados {today.year} (reales): {cerrados} &nbsp;&middot;&nbsp; Tendencia YoY acumulada: <strong>{yoy_txt}</strong></div>', unsafe_allow_html=True)
+
+    def _crec(val, base):
+        return round((val/base - 1)*100, 0) if base > 0 else None
 
     plan_rows = []
     for m in range(today.month, 13):
+        ap = _u(today.year-1, m)
+        sug = _sugerido(m)
+        pl = int(plan.get(m, sug))
         plan_rows.append({
             'Mes': f"{mes_abbr[m]} {today.year}",
-            'Año pasado': _u(today.year-1, m),
-            'Sugerido': _sugerido(m),
-            'Plan': int(st.session_state['forecast_anual'].get(m, _sugerido(m))),
+            'Año pasado': ap,
+            'Sugerido': sug,
+            'Crec. sug.': _crec(sug, ap),
+            'Plan': pl,
+            'Crec. plan': _crec(pl, ap),
         })
     plan_df = pd.DataFrame(plan_rows)
     edited_plan = st.data_editor(
         plan_df,
         column_config={
             'Mes': st.column_config.TextColumn('Mes', disabled=True),
-            'Año pasado': st.column_config.NumberColumn('Año pasado', disabled=True, format="%d u"),
+            'Año pasado': st.column_config.NumberColumn(f'{today.year-1}', disabled=True, format="%d u"),
             'Sugerido': st.column_config.NumberColumn('Sugerido', disabled=True, format="%d u"),
+            'Crec. sug.': st.column_config.NumberColumn('Crec. sug.', disabled=True, format="%d%%"),
             'Plan': st.column_config.NumberColumn('Plan (editable)', min_value=0, max_value=5000, step=10, format="%d u"),
+            'Crec. plan': st.column_config.NumberColumn('Crec. plan', disabled=True, format="%d%%"),
         },
         hide_index=True, use_container_width=True, key="plan_anual_editor",
     )
+    changed = False
     for idx, m in enumerate(range(today.month, 13)):
         try:
-            st.session_state['forecast_anual'][m] = int(edited_plan.iloc[idx]['Plan'])
+            v = int(edited_plan.iloc[idx]['Plan'])
+            if plan.get(m) != v:
+                changed = True
+            plan[m] = v
         except Exception:
             pass
+    st.session_state['forecast_anual'] = plan
+    if changed:
+        _save_plan(plan)   # persiste los ajustes en disco
 
-    st.caption("Cargá el plan una vez al año. Cada mes solo subís las ventas: el sistema actualiza el histórico y recalcula pedidos. El plan se mantiene salvo que lo edites.")
+    st.caption("Cargá el plan una vez al año (se guarda). Cada mes solo subís las ventas: se actualiza el histórico y se recalculan los pedidos.")
 
     # Totales para el motor: mes en curso y próximo
     mo_next = today.month + 1 if today.month < 12 else 12
@@ -317,7 +355,7 @@ with tabs[1]:
         with f1:
             f_rank = st.multiselect("Ranking", ['A','B','C','D'], default=['A','B','C','D'])
         with f2:
-            provs_available = sorted([p for p in adf['Proveedor'].unique() if p])
+            provs_available = sorted({str(p).strip() for p in adf['Proveedor'].dropna().unique() if str(p).strip()})
             f_prov = st.multiselect("Proveedora", provs_available, default=[])
         with f3:
             tipos_available = sorted([t for t in adf['Tipo'].unique() if t])

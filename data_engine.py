@@ -35,12 +35,26 @@ def load_orders(file) -> pd.DataFrame:
     df = df[~df['sku'].str.startswith('GC', na=False)]
     df = df[df['sku'].notna() & (df['sku'] != 'nan') & (df['sku'] != '')]
     
-    # Qty: if file has Cantidad col use it; otherwise 1 row = 1 unit
-    qty_col = next((c for c in df.columns if 'cantidad' in c.lower()), None)
+    # Cantidad por línea. WooCommerce a veces no exporta cantidad por ítem:
+    # 1) si hay columna de cantidad por línea, se usa;
+    # 2) si no, para pedidos de UNA sola línea se usa el total de artículos del
+    #    pedido (atribución segura); el resto queda en 1 (multi-línea sin desglose).
+    qty_col = next((c for c in df.columns
+                    if c.strip().lower() in ('cantidad','cantidad de productos','qty','quantity','cant.')), None)
+    order_col = next((c for c in df.columns if 'pedido' in c.lower()
+                      and any(k in c.lower() for k in ('número','numero','number'))), None)
+    tot_col = next((c for c in df.columns if 'total' in c.lower()
+                    and any(k in c.lower() for k in ('artícul','articul','item'))), None)
     if qty_col:
         df['qty'] = pd.to_numeric(df[qty_col], errors='coerce').fillna(1)
+    elif order_col and tot_col:
+        df['qty'] = 1
+        lineas = df.groupby(order_col)['sku'].transform('size')
+        mono = lineas == 1
+        df.loc[mono, 'qty'] = pd.to_numeric(df.loc[mono, tot_col], errors='coerce').fillna(1)
     else:
         df['qty'] = 1
+    df['qty'] = pd.to_numeric(df['qty'], errors='coerce').fillna(1).clip(lower=1).astype(int)
     
     return df[['fecha','sku','qty']].dropna(subset=['fecha','sku'])
 
