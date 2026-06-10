@@ -507,7 +507,7 @@ def build_analysis_df(
         if inv > 0 and cob < 1 and prom > 0 and not in_sale and prior in ('A','B'):
             return 'Urgente'
         if inv > 0 and 1 <= cob < 2 and prior in ('A','B') and not in_sale:
-            return 'Próximo'
+            return 'Próximo a quiebre'
         return ''
     
     df['Alerta'] = df.apply(get_alerta, axis=1)

@@ -8,6 +8,27 @@ import pandas as pd
 import requests
 from io import BytesIO
 
+_IMG_CACHE = {}
+def _fetch_img_bytes(url):
+    """Descarga la foto del producto y la devuelve como PNG en bytes (cacheada).
+    Si falla (sin red, URL inválida), devuelve None y el PDF sigue sin imagen."""
+    if not (isinstance(url, str) and url.startswith('http')):
+        return None
+    if url in _IMG_CACHE:
+        return _IMG_CACHE[url]
+    try:
+        r = requests.get(url, timeout=6)
+        r.raise_for_status()
+        from PIL import Image
+        im = Image.open(BytesIO(r.content)).convert('RGB')
+        im.thumbnail((200, 200))
+        buf = BytesIO()
+        im.save(buf, 'PNG')
+        _IMG_CACHE[url] = buf.getvalue()
+    except Exception:
+        _IMG_CACHE[url] = None
+    return _IMG_CACHE[url]
+
 ROSA = (251, 219, 219)
 ARENA = (223, 206, 192)
 NEGRO = (0, 0, 0)
@@ -94,35 +115,44 @@ class AndinaPDF(FPDF):
         self.set_fill_color(*NEGRO)
         self.set_text_color(*BLANCO)
         self.set_font('Helvetica', 'B', 8)
-        cols = [('SKU Andina', 24), ('Nombre', 48), ('SKU Prov.', 26),
-                ('Desc. Proveedora', 34), ('Cant.', 14), ('Precio', 18), ('Subtotal', 16)]
+        cols = [('Foto', 20), ('SKU', 20), ('Nombre', 40), ('SKU Prov.', 24),
+                ('Desc. Proveedora', 30), ('Cant.', 12), ('Precio', 18), ('Subtotal', 16)]
         for label, w in cols:
             self.cell(w, 7, label, border=0, fill=True)
         self.ln()
 
-    def table_row(self, sku, nombre, sku_prov, desc_prov, cant, precio, subtotal, shade=False):
+    def table_row(self, img_bytes, sku, nombre, sku_prov, desc_prov, cant, precio, subtotal, shade=False):
+        h = 16
+        x0, y0 = 15, self.get_y()
+        if y0 + h > 280:                      # salto de página
+            self.add_page()
+            self.table_header()
+            y0 = self.get_y()
         self.set_fill_color(*(VERDE_AGUA if shade else BLANCO))
-        self.set_text_color(*GRIS)
-        self.set_font('Helvetica', '', 8)
-        y_start = self.get_y()
-        # Draw cells
-        self.cell(24, 6, str(sku)[:12], fill=True)
-        self.cell(48, 6, str(nombre)[:30], fill=True)
-        self.cell(26, 6, str(sku_prov)[:16], fill=True)
-        self.cell(34, 6, str(desc_prov)[:22], fill=True)
-        self.set_font('Helvetica', 'B', 8)
-        self.set_text_color(*NEGRO)
-        self.cell(14, 6, str(cant), align='C', fill=True)
-        self.set_font('Helvetica', '', 8)
-        self.set_text_color(*GRIS)
-        precio_str = f'${precio:,.0f}' if precio and precio > 0 else '-'
-        sub_str = f'${subtotal:,.0f}' if subtotal and subtotal > 0 else '-'
-        self.cell(18, 6, precio_str, align='R', fill=True)
-        self.cell(16, 6, sub_str, align='R', fill=True)
-        # Bottom border
+        self.rect(x0, y0, 180, h, 'F')
+        if img_bytes:
+            try:
+                self.image(BytesIO(img_bytes), x=x0 + 2, y=y0 + 2, w=16, h=12)
+            except Exception:
+                pass
+
+        def txt(x, w, s, align='L', bold=False, color=GRIS):
+            self.set_xy(x, y0 + (h - 5) / 2)
+            self.set_font('Helvetica', 'B' if bold else '', 8)
+            self.set_text_color(*color)
+            self.cell(w, 5, s, align=align)
+
+        txt(35, 20, str(sku)[:11])
+        txt(55, 40, str(nombre)[:32])
+        txt(95, 24, str(sku_prov)[:14])
+        txt(119, 30, str(desc_prov)[:20])
+        txt(149, 12, str(cant), align='C', bold=True, color=NEGRO)
+        txt(161, 18, f'${precio:,.0f}' if precio and precio > 0 else '-', align='R')
+        txt(179, 16, f'${subtotal:,.0f}' if subtotal and subtotal > 0 else '-', align='R')
+
         self.set_draw_color(*ARENA)
-        self.line(15, self.get_y(), 195, self.get_y())
-        self.ln()
+        self.set_xy(x0, y0 + h)
+        self.line(15, y0 + h, 195, y0 + h)
 
     def total_row(self, total_unidades, total_ars):
         self.ln(3)
@@ -130,8 +160,8 @@ class AndinaPDF(FPDF):
         self.set_text_color(*BLANCO)
         self.set_font('Helvetica', 'B', 9)
         self.set_x(15)
-        self.cell(132, 8, 'TOTAL DEL PEDIDO', fill=True)
-        self.cell(14, 8, str(total_unidades), align='C', fill=True)
+        self.cell(134, 8, 'TOTAL DEL PEDIDO', fill=True)
+        self.cell(12, 8, str(total_unidades), align='C', fill=True)
         self.cell(18, 8, '', fill=True)
         total_str = f'${total_ars:,.0f}' if total_ars > 0 else '-'
         self.cell(16, 8, total_str, align='R', fill=True)
@@ -161,6 +191,7 @@ def generate_pdf(pedido_df: pd.DataFrame, proveedor: str, edited_qtys: dict = No
         costo = row.get('Costo_ARS', None)
         subtotal = qty * costo if (costo and not pd.isna(costo)) else None
         rows_data.append({
+            'img': _fetch_img_bytes(row.get('Imagen_url', None)),
             'sku': _s(sku),
             'nombre': _s(str(row.get('Nombre', ''))[:32]),
             'sku_prov': _s(str(row.get('SKU_Prov', '') or '')),
@@ -177,7 +208,7 @@ def generate_pdf(pedido_df: pd.DataFrame, proveedor: str, edited_qtys: dict = No
     
     for i, r in enumerate(rows_data):
         pdf.table_row(
-            r['sku'], r['nombre'], r['sku_prov'], r['desc_prov'],
+            r['img'], r['sku'], r['nombre'], r['sku_prov'], r['desc_prov'],
             r['qty'], r['precio'], r['subtotal'], shade=(i % 2 == 0)
         )
     

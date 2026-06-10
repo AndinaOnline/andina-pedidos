@@ -271,7 +271,7 @@ with tabs[0]:
     if today.month > 1:
         cerrados = " · ".join(f"{mes_abbr[m]}: {_u(today.year,m)}u" for m in range(1, today.month))
         st.markdown(f'<div style="font-size:11px;color:{COLORS["gris_texto"]};font-family:Raleway;margin-bottom:4px;">Meses cerrados {today.year} (reales): {cerrados}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div style="font-size:11px;color:{COLORS["gris_texto"]};font-family:Raleway;margin-bottom:8px;">Sugerido = mismo mes de {today.year-1} × (1 + YoY acumulado ene–{mes_abbr[today.month-1].lower()}). Ese YoY hoy es <strong>{yoy_txt}</strong> y es el % que ves en la columna "Crec. sug.".</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:11px;color:{COLORS["gris_texto"]};font-family:Raleway;margin-bottom:8px;">Sugerido = mismo mes de {today.year-1} × (1 + YoY acumulado ene–{mes_abbr[today.month-1].lower()}). El campo <strong>Forecast</strong> ya viene cargado con ese sugerido (YoY {yoy_txt}); editalo directo si querés ajustarlo.</div>', unsafe_allow_html=True)
 
     def _crec(val, base):
         return round((val/base - 1)*100, 0) if base > 0 else None
@@ -284,10 +284,8 @@ with tabs[0]:
         plan_rows.append({
             'Mes': f"{mes_abbr[m]} {today.year}",
             'Año pasado': ap,
-            'Sugerido': sug,
-            'Crec. sug.': _crec(sug, ap),
-            'Plan': pl,
-            'Crec. plan': _crec(pl, ap),
+            'Forecast': pl,
+            'Crec.': _crec(pl, ap),
         })
     plan_df = pd.DataFrame(plan_rows)
     edited_plan = st.data_editor(
@@ -295,17 +293,15 @@ with tabs[0]:
         column_config={
             'Mes': st.column_config.TextColumn('Mes', disabled=True),
             'Año pasado': st.column_config.NumberColumn(f'{today.year-1}', disabled=True, format="%d u"),
-            'Sugerido': st.column_config.NumberColumn('Sugerido', disabled=True, format="%d u"),
-            'Crec. sug.': st.column_config.NumberColumn('Crec. sug.', disabled=True, format="%d%%"),
-            'Plan': st.column_config.NumberColumn('Plan (editable)', min_value=0, max_value=5000, step=10, format="%d u"),
-            'Crec. plan': st.column_config.NumberColumn('Crec. plan', disabled=True, format="%d%%"),
+            'Forecast': st.column_config.NumberColumn('Forecast (editable)', min_value=0, max_value=5000, step=10, format="%d u"),
+            'Crec.': st.column_config.NumberColumn('Crec. YoY', disabled=True, format="%d%%"),
         },
         hide_index=True, use_container_width=True, key="plan_anual_editor",
     )
     changed = False
     for idx, m in enumerate(range(today.month, 13)):
         try:
-            v = int(edited_plan.iloc[idx]['Plan'])
+            v = int(edited_plan.iloc[idx]['Forecast'])
             if plan.get(m) != v:
                 changed = True
             plan[m] = v
@@ -319,7 +315,7 @@ with tabs[0]:
 
     # Resumen EN VIVO (se recalcula al editar el plan): total y YoY resultante.
     try:
-        plan_tot = int(sum(int(edited_plan.iloc[i]['Plan']) for i in range(len(edited_plan))))
+        plan_tot = int(sum(int(edited_plan.iloc[i]['Forecast']) for i in range(len(edited_plan))))
         ap_tot = int(sum(_u(today.year-1, m) for m in range(today.month, 13)))
         cerr_tot = int(sum(_u(today.year, m) for m in range(1, today.month)))
         anio_plan = cerr_tot + plan_tot
@@ -418,7 +414,7 @@ with tabs[1]:
             estados_available = sorted({str(e).strip() for e in adf['Estado'].dropna().unique() if str(e).strip()})
             f_estado = st.multiselect("Estado", estados_available, default=['Activo','SALE'])
         with f5:
-            f_alerta = st.multiselect("Alerta", ['Quiebre','Urgente','Próximo'], default=[])
+            f_alerta = st.multiselect("Alerta", ['Quiebre','Urgente','Próximo a quiebre'], default=[])
         
         # Apply filters
         filtered = adf.copy()
@@ -443,6 +439,8 @@ with tabs[1]:
         show_df['Pedido prop.'] = show_df['Pedido prop.'].apply(lambda x: int(x) if x > 0 else '—')
         show_df['Fcst mes'] = show_df['Fcst mes'].round(1)
         show_df['Fcst próx'] = show_df['Fcst próx'].round(1)
+        # Marca "Nuevo" en Estado (productos con < 3 meses desde su 1ra venta)
+        show_df['Estado'] = ['Nuevo' if n else e for e, n in zip(show_df['Estado'], filtered['Es_nuevo'])]
         
         # Editable pedido column
         edited = st.data_editor(
@@ -471,6 +469,7 @@ with tabs[1]:
                 st.session_state['edited_pedido'][sku] = int(new_qty)
         
         st.caption(f"Podés editar la columna 'Pedido prop.' directamente. Los cambios se reflejan en la pestaña Pedidos.")
+        st.caption("Alertas — Quiebre: sin stock y con ventas · Urgente: menos de 1 mes de cobertura · Próximo a quiebre: entre 1 y 2 meses de cobertura. Estado 'Nuevo' = menos de 3 meses desde la primera venta.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -578,17 +577,14 @@ with tabs[2]:
             # Actions
             col_a, col_b, col_c = st.columns([1,1,3])
             with col_a:
-                if st.button("Descargar PDF", use_container_width=True, type="primary"):
-                    edited_qtys = {prov_df.iloc[i]['SKU']: int(edited_prov.iloc[i]['Cantidad']) 
-                                   for i in range(len(edited_prov))}
-                    pdf_bytes = generate_pdf(prov_df, selected_prov, edited_qtys)
-                    st.download_button(
-                        label="Descargar PDF",
-                        data=pdf_bytes,
-                        file_name=f"Andina_Pedido_{selected_prov}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                    )
+                edited_qtys = {prov_df.iloc[i]['SKU']: int(edited_prov.iloc[i]['Cantidad'])
+                               for i in range(len(edited_prov))}
+                pdf_bytes = generate_pdf(prov_df, selected_prov, edited_qtys)
+                st.download_button(
+                    "Descargar PDF", data=pdf_bytes,
+                    file_name=f"Andina_Pedido_{selected_prov}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf", use_container_width=True, type="primary",
+                )
             with col_b:
                 if st.button("Copiar para WhatsApp", use_container_width=True):
                     lines = [f"*Pedido Andina — {selected_prov}*", f"Fecha: {datetime.now().strftime('%d/%m/%Y')}", ""]
@@ -609,7 +605,41 @@ with tabs[3]:
         st.info("Completá los datos en Inicio primero.")
     else:
         adf = st.session_state['analysis_df']
-        
+
+        # ── Tabla general con colores por ranking ────────────────────────────
+        section_title("Recomendación por producto")
+        st.caption("Verde: productos A/B (prioritarios). Amarillo: C/D. Inventario 0 en rojo y negrita para A/B/Nuevos.")
+        rec = adf[adf['Estado'].isin(['Activo', 'SALE'])].copy()
+        rec = rec.sort_values(['Prior', 'Prom_mensual'], ascending=[True, False])
+        rec['EstadoView'] = ['Nuevo' if n else e for e, n in zip(rec['Estado'], rec['Es_nuevo'])]
+        rview = rec[['SKU', 'Nombre', 'Tipo', 'Proveedor', 'Prior', 'EstadoView',
+                     'Inventario', 'Prom_mensual', 'Alerta', 'Pedido_propuesto']].copy()
+        rview.columns = ['SKU', 'Nombre', 'Tipo', 'Proveedora', 'Rank.', 'Estado',
+                         'Inv.', 'Prom/mes', 'Alerta', 'Pedido prop.']
+        rview['Prom/mes'] = rview['Prom/mes'].round(1)
+        rview['Pedido prop.'] = rview['Pedido prop.'].apply(lambda x: int(x) if x > 0 else '—')
+
+        def _row_style(r):
+            rank = r['Rank.']
+            bg = '#E8F3EC' if rank in ('A', 'B') else '#FBF3D6'   # verde / amarillo suave
+            return [f'background-color: {bg}'] * len(r)
+
+        def _inv_style(col):
+            out = []
+            for inv, rank, est in zip(col, rview['Rank.'], rview['Estado']):
+                if inv == 0 and (rank in ('A', 'B') or est == 'Nuevo'):
+                    out.append('color: #C0392B; font-weight: 700')
+                else:
+                    out.append('')
+            return out
+
+        styler = (rview.style
+                  .apply(_row_style, axis=1)
+                  .apply(_inv_style, subset=['Inv.'])
+                  .format({'Prom/mes': '{:.1f}'}))
+        st.dataframe(styler, use_container_width=True, hide_index=True, height=440)
+
+        st.divider()
         # Alertas de inventario
         section_title("Alertas de inventario")
         alertas = adf[adf['Alerta'] != ''].sort_values(['Alerta','Prior'])
@@ -626,7 +656,7 @@ with tabs[3]:
                 u = alert_counts.get('Urgente', 0)
                 st.markdown(f'<div style="background:#fff3cd;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:600;color:#856404;">{u}</div><div style="font-size:11px;color:#856404;">URGENTES</div></div>', unsafe_allow_html=True)
             with ac3:
-                p = alert_counts.get('Próximo', 0)
+                p = alert_counts.get('Próximo a quiebre', 0)
                 st.markdown(f'<div style="background:#cce5ff;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:600;color:#004085;">{p}</div><div style="font-size:11px;color:#004085;">PRÓXIMOS</div></div>', unsafe_allow_html=True)
             
             st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
@@ -701,7 +731,30 @@ with tabs[4]:
         view = costs_df[['SKU','Proveedor','Nombre_Prov','SKU_Prov','Costo_ARS']].copy()
         view['Costo_ARS'] = view.apply(
             lambda r: edited_costs.get(str(r['SKU']), r['Costo_ARS']), axis=1)
-        view = view.rename(columns={
+
+        # Traer Estado y Tipo desde el análisis (si está) para poder filtrar
+        adf_p = st.session_state.get('analysis_df')
+        if adf_p is not None:
+            meta = adf_p[['SKU','Estado','Tipo']].drop_duplicates('SKU')
+            view = view.merge(meta, on='SKU', how='left')
+        else:
+            view['Estado'] = ''; view['Tipo'] = ''
+
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            provs = sorted({str(p).strip() for p in view['Proveedor'].dropna().unique() if str(p).strip()})
+            fp = st.multiselect("Proveedora", provs, default=[], key="precio_f_prov")
+        with f2:
+            ests = sorted({str(e).strip() for e in view['Estado'].dropna().unique() if str(e).strip()})
+            fe = st.multiselect("Estado", ests, default=[], key="precio_f_est")
+        with f3:
+            tipos = sorted({str(t).strip() for t in view['Tipo'].dropna().unique() if str(t).strip()})
+            ft = st.multiselect("Tipo", tipos, default=[], key="precio_f_tipo")
+        if fp: view = view[view['Proveedor'].isin(fp)]
+        if fe: view = view[view['Estado'].isin(fe)]
+        if ft: view = view[view['Tipo'].isin(ft)]
+
+        view = view[['SKU','Proveedor','Nombre_Prov','SKU_Prov','Costo_ARS']].rename(columns={
             'Nombre_Prov': 'Nombre proveedora', 'SKU_Prov': 'SKU proveedora', 'Costo_ARS': 'Costo ARS'})
 
         st.markdown(f'<div style="font-size:12px;color:{COLORS["gris_texto"]};margin:6px 0;">Editá "Costo ARS" a mano si necesitás. Los cambios se guardan solos.</div>', unsafe_allow_html=True)

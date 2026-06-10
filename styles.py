@@ -23,7 +23,7 @@ CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700&display=swap');
 
-.stApp {{ background: {COLORS['crema']}; }}
+.stApp {{ background: #FFFFFF; }}
 html, body, [class*="css"] {{
     font-family: 'Raleway', sans-serif;
     color: {COLORS['texto']};
@@ -36,7 +36,7 @@ html, body, [class*="css"] {{
     padding: 14px 4px 16px; margin-bottom: 18px;
     border-bottom: 1px solid {COLORS['rosa_borde']};
 }}
-.andina-logo-img {{ height: 42px; width: auto; display: block; }}
+.andina-logo-img {{ height: 56px; width: auto; display: block; }}
 .andina-header-right {{
     font-family: 'Raleway', sans-serif; font-size: 11px;
     color: {COLORS['texto']}; text-align: right; letter-spacing: 0.5px;
