@@ -35,10 +35,14 @@ def load_orders(file) -> pd.DataFrame:
     df = df[~df['sku'].str.startswith('GC', na=False)]
     df = df[df['sku'].notna() & (df['sku'] != 'nan') & (df['sku'] != '')]
     
-    # Cantidad por línea. WooCommerce a veces no exporta cantidad por ítem:
-    # 1) si hay columna de cantidad por línea, se usa;
-    # 2) si no, para pedidos de UNA sola línea se usa el total de artículos del
-    #    pedido (atribución segura); el resto queda en 1 (multi-línea sin desglose).
+    # UNIDADES por línea. El export de WooCommerce no trae cantidad por ítem,
+    # pero sí 'Total de artículos' POR PEDIDO (igual en todas las filas del pedido).
+    # Ese es el dato que reproduce los totales mensuales reales. Estrategia:
+    #  1) si existe una columna de cantidad por línea, se usa tal cual;
+    #  2) si no, se reparte el total de artículos del pedido entre sus líneas de
+    #     SKU (reparto entero; el total mensual queda exacto). En pedidos de una
+    #     sola línea es exacto; en multi-línea con cantidad>1 el reparto entre SKU
+    #     es una aproximación (el archivo no permite saber qué línea llevaba más).
     qty_col = next((c for c in df.columns
                     if c.strip().lower() in ('cantidad','cantidad de productos','qty','quantity','cant.')), None)
     order_col = next((c for c in df.columns if 'pedido' in c.lower()
@@ -48,10 +52,13 @@ def load_orders(file) -> pd.DataFrame:
     if qty_col:
         df['qty'] = pd.to_numeric(df[qty_col], errors='coerce').fillna(1)
     elif order_col and tot_col:
-        df['qty'] = 1
-        lineas = df.groupby(order_col)['sku'].transform('size')
-        mono = lineas == 1
-        df.loc[mono, 'qty'] = pd.to_numeric(df.loc[mono, tot_col], errors='coerce').fillna(1)
+        n = df.groupby(order_col)['sku'].transform('size')
+        tot = pd.to_numeric(df[tot_col], errors='coerce').fillna(n)
+        tot = tot.where(tot >= n, n)                      # nunca menos que 1 por línea
+        pos = df.groupby(order_col).cumcount()
+        base = (tot // n).astype(int)
+        rem = (tot.astype(int) % n)
+        df['qty'] = base + (pos < rem).astype(int)
     else:
         df['qty'] = 1
     df['qty'] = pd.to_numeric(df['qty'], errors='coerce').fillna(1).clip(lower=1).astype(int)
