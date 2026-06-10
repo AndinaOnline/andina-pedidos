@@ -45,6 +45,20 @@ def load_orders(file) -> pd.DataFrame:
     return df[['fecha','sku','qty']].dropna(subset=['fecha','sku'])
 
 
+def merge_orders(base: pd.DataFrame, nuevo: pd.DataFrame) -> pd.DataFrame:
+    """Combina el histórico base con ventas nuevas: los meses presentes en
+    'nuevo' REEMPLAZAN a los del base (actualiza el mes en curso sin duplicar).
+    Los meses que solo están en base se conservan (histórico grabado)."""
+    if base is None or base.empty:
+        return nuevo
+    if nuevo is None or nuevo.empty:
+        return base
+    meses_nuevos = set(zip(nuevo['fecha'].dt.year, nuevo['fecha'].dt.month))
+    base_filtrado = base[~base.apply(
+        lambda r: (r['fecha'].year, r['fecha'].month) in meses_nuevos, axis=1)]
+    return pd.concat([base_filtrado, nuevo], ignore_index=True)
+
+
 def load_inventory(file) -> pd.DataFrame:
     """Load WooCommerce product export CSV."""
     try:
@@ -345,7 +359,8 @@ def build_analysis_df(
     all_skus = woo_skus | set(orders_all['sku'].unique())
     
     for sku in all_skus:
-        if sku.startswith('GC') or not sku or sku == 'nan':
+        sku = str(sku).strip()
+        if not sku or sku == 'nan' or sku.startswith('GC'):
             continue
         
         inv_row = inv_df[inv_df['SKU'] == sku]
@@ -467,11 +482,11 @@ def build_analysis_df(
         inv = row['Inventario']; prom = row['Prom_mensual']; cob = row['Cobertura_meses']
         prior = row['Prior']; in_sale = row['Estado'] == 'SALE'
         if inv == 0 and prom > 0 and not in_sale and prior in ('A','B','C'):
-            return '🔴 Quiebre'
+            return 'Quiebre'
         if inv > 0 and cob < 1 and prom > 0 and not in_sale and prior in ('A','B'):
-            return '🟠 Urgente'
+            return 'Urgente'
         if inv > 0 and 1 <= cob < 2 and prior in ('A','B') and not in_sale:
-            return '🟡 Próximo'
+            return 'Próximo'
         return ''
     
     df['Alerta'] = df.apply(get_alerta, axis=1)
