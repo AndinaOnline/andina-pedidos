@@ -412,6 +412,8 @@ with tabs[1]:
             f_tipo = st.multiselect("Tipo", tipos_available, default=[])
         with f4:
             estados_available = sorted({str(e).strip() for e in adf['Estado'].dropna().unique() if str(e).strip()})
+            if 'Nuevo' not in estados_available:
+                estados_available = estados_available + ['Nuevo']
             f_estado = st.multiselect("Estado", estados_available, default=['Activo','SALE'])
         with f5:
             f_alerta = st.multiselect("Alerta", ['Quiebre','Urgente','Próximo a quiebre'], default=[])
@@ -421,7 +423,12 @@ with tabs[1]:
         if f_rank: filtered = filtered[filtered['Prior'].isin(f_rank)]
         if f_prov: filtered = filtered[filtered['Proveedor'].isin(f_prov)]
         if f_tipo: filtered = filtered[filtered['Tipo'].isin(f_tipo)]
-        if f_estado: filtered = filtered[filtered['Estado'].isin(f_estado)]
+        if f_estado:
+            _est = [e for e in f_estado if e != 'Nuevo']
+            mask = filtered['Estado'].isin(_est)
+            if 'Nuevo' in f_estado:
+                mask = mask | filtered['Es_nuevo']
+            filtered = filtered[mask]
         if f_alerta: filtered = filtered[filtered['Alerta'].isin(f_alerta)]
         
         section_title(f"Resultados — {len(filtered)} productos")
@@ -436,7 +443,7 @@ with tabs[1]:
                            'Prom/mes','Cob.(m)','YTD 2026','Alerta','Pedido prop.','Fcst mes','Fcst próx']
         show_df['Prom/mes'] = show_df['Prom/mes'].round(1)
         show_df['Cob.(m)'] = show_df['Cob.(m)'].replace(99, '—')
-        show_df['Pedido prop.'] = show_df['Pedido prop.'].apply(lambda x: int(x) if x > 0 else '—')
+        show_df['Pedido prop.'] = show_df['Pedido prop.'].apply(lambda x: int(x) if pd.notna(x) else 0)
         show_df['Fcst mes'] = show_df['Fcst mes'].round(1)
         show_df['Fcst próx'] = show_df['Fcst próx'].round(1)
         # Marca "Nuevo" en Estado (productos con < 3 meses desde su 1ra venta)
@@ -518,14 +525,30 @@ with tabs[2]:
             
             section_title(f"Pedido — {selected_prov}")
             
-            # Editable table for this provider
-            edit_cols = ['SKU','Nombre','SKU_Prov','Nombre_Prov','Pedido_propuesto','Costo_ARS','Imagen_url']
-            prov_display = prov_df[edit_cols].copy()
-            prov_display.columns = ['SKU','Nombre','SKU Prov.','Descripción Prov.','Cantidad','Precio unit. ARS','URL Foto']
-            prov_display['Subtotal ARS'] = prov_display.apply(
-                lambda r: int(r['Cantidad'] * r['Precio unit. ARS']) 
-                if (pd.notna(r['Precio unit. ARS']) and r['Precio unit. ARS'] > 0) else None, axis=1)
-            
+            # Último precio disponible por SKU: edición manual > costo actual > último histórico
+            last_hist = {}
+            if os.path.exists(_COSTS_HIST_PATH):
+                try:
+                    _h = pd.read_csv(_COSTS_HIST_PATH).sort_values('mes_vigencia').drop_duplicates('SKU', keep='last')
+                    last_hist = dict(zip(_h['SKU'].astype(str), pd.to_numeric(_h['Costo_ARS'], errors='coerce')))
+                except Exception:
+                    last_hist = {}
+            ed_costs = st.session_state.get('edited_costs', {})
+            def _eff_price(sku, base):
+                v = ed_costs.get(str(sku))
+                if v is not None and pd.notna(v) and v > 0: return float(v)
+                if base is not None and pd.notna(base) and base > 0: return float(base)
+                h = last_hist.get(str(sku))
+                return float(h) if (h is not None and pd.notna(h) and h > 0) else None
+
+            prov_display = prov_df[['SKU','Nombre','SKU_Prov','Nombre_Prov','Pedido_propuesto','Imagen_url']].copy()
+            prov_display.columns = ['SKU','Nombre','SKU Prov.','Descripción Prov.','Cantidad','URL Foto']
+            prov_display['Precio actual'] = [_eff_price(s, b) for s, b in zip(prov_df['SKU'], prov_df['Costo_ARS'])]
+            prov_display['Nuevo precio'] = None
+            prov_display['Subtotal'] = prov_display.apply(
+                lambda r: int(r['Cantidad'] * r['Precio actual'])
+                if (pd.notna(r['Precio actual']) and r['Precio actual'] > 0) else None, axis=1)
+
             edited_prov = st.data_editor(
                 prov_display,
                 column_config={
@@ -534,28 +557,40 @@ with tabs[2]:
                     'SKU Prov.': st.column_config.TextColumn('SKU Prov.', width='small'),
                     'Descripción Prov.': st.column_config.TextColumn('Descripción Prov.', width='medium'),
                     'Cantidad': st.column_config.NumberColumn('Cantidad', min_value=0, max_value=999, width='small'),
-                    'Precio unit. ARS': st.column_config.NumberColumn('Precio', format="$%d", width='small'),
-                    'Subtotal ARS': st.column_config.NumberColumn('Subtotal', format="$%d", disabled=True, width='small'),
+                    'Precio actual': st.column_config.NumberColumn('Precio actual', format="$%d", disabled=True, width='small'),
+                    'Nuevo precio': st.column_config.NumberColumn('Nuevo precio', format="$%d", min_value=0, width='small', help='Completá solo si cambió; se aplica al pedido y se guarda'),
+                    'Subtotal': st.column_config.NumberColumn('Subtotal', format="$%d", disabled=True, width='small'),
                     'URL Foto': st.column_config.LinkColumn('Foto', display_text="Ver", width='small'),
                 },
-                use_container_width=True,
-                hide_index=True,
-                key=f"edit_table_{selected_prov}",
+                use_container_width=True, hide_index=True, key=f"edit_table_{selected_prov}",
             )
-            
-            # Capture cost edits
+
+            # Capturar nuevo precio (si se cargó) y cantidades
+            costs_changed = False
             for i, row in edited_prov.iterrows():
-                sku = prov_df.loc[i]['SKU']
-                new_cost = row['Precio unit. ARS']
-                orig_cost = prov_df.loc[i]['Costo_ARS']
-                if pd.notna(new_cost) and new_cost != orig_cost:
-                    st.session_state['edited_costs'][sku] = new_cost
+                sku = str(prov_df.loc[i]['SKU'])
+                nuevo = row['Nuevo precio']
+                if pd.notna(nuevo) and nuevo and float(nuevo) > 0 and ed_costs.get(sku) != float(nuevo):
+                    ed_costs[sku] = float(nuevo); costs_changed = True
                 new_qty = row['Cantidad']
                 st.session_state['edited_pedido'][sku] = int(new_qty) if pd.notna(new_qty) else 0
-            
-            # Totals
-            total_u = edited_prov['Cantidad'].sum()
-            total_ars = edited_prov['Subtotal ARS'].dropna().sum()
+            st.session_state['edited_costs'] = ed_costs
+            if costs_changed:
+                _save_edited_costs(ed_costs)
+
+            # Precio efectivo final (incluye lo recién editado) -> totales y PDF
+            eff_now = {str(s): _eff_price(s, b) for s, b in zip(prov_df['SKU'], prov_df['Costo_ARS'])}
+            prov_df = prov_df.copy()
+            prov_df['Costo_ARS'] = prov_df['SKU'].astype(str).map(eff_now)
+
+            total_u = int(pd.to_numeric(edited_prov['Cantidad'], errors='coerce').fillna(0).sum())
+            total_ars = 0
+            for i in range(len(edited_prov)):
+                q = edited_prov.iloc[i]['Cantidad']
+                p = eff_now.get(str(prov_df.iloc[i]['SKU']))
+                if pd.notna(q) and p:
+                    total_ars += int(q) * p
+            total_ars = int(total_ars)
             
             st.markdown(f"""
             <div style="background:{COLORS['negro']}; color:{COLORS['arena']}; border-radius:8px; 
@@ -589,8 +624,9 @@ with tabs[2]:
                 if st.button("Copiar para WhatsApp", use_container_width=True):
                     lines = [f"*Pedido Andina — {selected_prov}*", f"Fecha: {datetime.now().strftime('%d/%m/%Y')}", ""]
                     for _, row in edited_prov[edited_prov['Cantidad'] > 0].iterrows():
+                        _p = eff_now.get(str(row['SKU']))
                         lines.append(f"• {row['SKU']} | {row['Nombre']} | x{int(row['Cantidad'])}" +
-                                    (f" | ${int(row['Precio unit. ARS']):,}" if pd.notna(row['Precio unit. ARS']) else ""))
+                                    (f" | ${int(_p):,}" if _p else ""))
                     lines.append(f"\n*Total: {int(total_u)} uds | ${int(total_ars):,} ARS*")
                     wa_text = "\n".join(lines)
                     st.code(wa_text, language=None)
@@ -640,67 +676,42 @@ with tabs[3]:
         st.dataframe(styler, use_container_width=True, hide_index=True, height=440)
 
         st.divider()
-        # Alertas de inventario
-        section_title("Alertas de inventario")
-        alertas = adf[adf['Alerta'] != ''].sort_values(['Alerta','Prior'])
-        
-        if len(alertas) == 0:
-            st.success("No hay alertas críticas en este momento.")
-        else:
-            alert_counts = alertas['Alerta'].value_counts()
-            ac1, ac2, ac3 = st.columns(3)
-            with ac1:
-                q = alert_counts.get('Quiebre', 0)
-                st.markdown(f'<div style="background:#f8d7da;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:600;color:#721c24;">{q}</div><div style="font-size:11px;color:#721c24;">QUIEBRES</div></div>', unsafe_allow_html=True)
-            with ac2:
-                u = alert_counts.get('Urgente', 0)
-                st.markdown(f'<div style="background:#fff3cd;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:600;color:#856404;">{u}</div><div style="font-size:11px;color:#856404;">URGENTES</div></div>', unsafe_allow_html=True)
-            with ac3:
-                p = alert_counts.get('Próximo a quiebre', 0)
-                st.markdown(f'<div style="background:#cce5ff;border-radius:8px;padding:12px;text-align:center;"><div style="font-size:22px;font-weight:600;color:#004085;">{p}</div><div style="font-size:11px;color:#004085;">PRÓXIMOS</div></div>', unsafe_allow_html=True)
-            
-            st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
-            alert_display = alertas[['Alerta','SKU','Nombre','Proveedor','Prior','Estado','Inventario','Prom_mensual','Cobertura_meses']].copy()
-            alert_display.columns = ['Alerta','SKU','Nombre','Proveedora','Rank.','Estado','Inv.','Prom/mes','Cob.(m)']
-            alert_display['Cob.(m)'] = alert_display['Cob.(m)'].replace(99, '—')
-            st.dataframe(alert_display, use_container_width=True, hide_index=True, height=300)
-        
-        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
-        
-        # SALE recommendations
-        section_title("Candidatos a SALE — C y D con más de 6 meses")
-        sale_cand = adf[
-            (adf['Prior'].isin(['C','D'])) &
-            (adf['Sem_vida'] > 26) &
-            (~adf['Estado'].isin(['Borrador','BAJA'])) &
-            (adf['Inventario'] > 0)
-        ].sort_values(['Prior','Sem_vida'], ascending=[False,False])
-        
-        if len(sale_cand) > 0:
-            st.markdown(f'<div style="font-size:12px;color:{COLORS["gris_texto"]};margin-bottom:8px;">**{len(sale_cand)}** productos candidatos a SALE. Filtrá por proveedora para accionar por lotes.</div>', unsafe_allow_html=True)
-            sale_display = sale_cand[['SKU','Nombre','Tipo','Proveedor','Prior','Estado','Inventario','Prom_mensual','Precio_normal','Precio_rebajado']].copy()
-            sale_display['Precio recom. (-30%)'] = sale_display['Precio_normal'].apply(
-                lambda x: int(x * 0.70) if pd.notna(x) and x > 0 else None)
-            sale_display.columns = ['SKU','Nombre','Tipo','Proveedora','Rank.','Estado','Inv.','Prom/mes','Precio normal','Precio rebajado','Precio recom. (-30%)']
-            st.dataframe(sale_display, use_container_width=True, hide_index=True, height=300)
-        
-        st.markdown('<div style="height:8px;"></div>', unsafe_allow_html=True)
-        
-        # Borrador recommendations
-        section_title("Para pasar a Borrador — D, sin stock, aún activos")
+        # ── Recomendación 1: pasar a BORRADOR ────────────────────────────────
+        section_title("Pasar a Borrador — productos D sin inventario")
         borra_cand = adf[
             (adf['Prior'] == 'D') &
             (adf['Inventario'] == 0) &
-            (adf['Estado'].isin(['Activo','SALE'])) &
-            (adf['Sem_vida'] > 26)
-        ].sort_values('Sem_vida', ascending=False)
-        
-        if len(borra_cand) > 0:
-            st.markdown(f'<div style="font-size:12px;color:{COLORS["gris_texto"]};margin-bottom:8px;">**{len(borra_cand)}** productos sin stock, con ranking D, aún publicados en WooCommerce.</div>', unsafe_allow_html=True)
-            borra_display = borra_cand[['SKU','Nombre','Tipo','Proveedor','Estado','Inventario','YTD_2026','Sem_vida']].copy()
-            borra_display['Sem_vida'] = borra_display['Sem_vida'].apply(lambda x: f"{x/4.3:.0f} meses")
-            borra_display.columns = ['SKU','Nombre','Tipo','Proveedora','Estado','Inv.','YTD 2026','Antigüedad']
-            st.dataframe(borra_display, use_container_width=True, hide_index=True, height=250)
+            (~adf['Estado'].isin(['Borrador', 'BAJA']))
+        ].sort_values('YTD_2026')
+        if len(borra_cand) == 0:
+            st.success("No hay productos D sin stock para pasar a Borrador.")
+        else:
+            st.caption(f"{len(borra_cand)} productos ranking D, inventario 0. Sugerencia: pasarlos a Borrador en WooCommerce.")
+            bd = borra_cand[['SKU','Nombre','Tipo','Proveedor','Estado','Inventario','YTD_2026','Prom_mensual']].copy()
+            bd.columns = ['SKU','Nombre','Tipo','Proveedora','Estado','Inv.','YTD 2026','Prom/mes']
+            bd['Prom/mes'] = bd['Prom/mes'].round(1)
+            st.dataframe(bd, use_container_width=True, hide_index=True, height=300)
+
+        st.divider()
+        # ── Recomendación 2: poner en SALE ───────────────────────────────────
+        section_title("Poner en SALE — productos D (no nuevos) con inventario")
+        sale_cand = adf[
+            (adf['Prior'] == 'D') &
+            (~adf['Es_nuevo']) &
+            (adf['Inventario'] > 0) &
+            (~adf['Estado'].isin(['Borrador', 'BAJA', 'SALE']))
+        ].sort_values('Inventario', ascending=False)
+        if len(sale_cand) == 0:
+            st.success("No hay productos D con stock para poner en SALE.")
+        else:
+            st.caption(f"{len(sale_cand)} productos ranking D con stock. Sugerencia: ponerlos en SALE para liquidar.")
+            sd = sale_cand[['SKU','Nombre','Tipo','Proveedor','Inventario','Prom_mensual','Precio_normal']].copy()
+            sd['Precio recom. (-30%)'] = sd['Precio_normal'].apply(
+                lambda x: int(round(x * 0.70 / 1000) * 1000) if pd.notna(x) and x > 0 else None)
+            sd.columns = ['SKU','Nombre','Tipo','Proveedora','Inv.','Prom/mes','Precio normal','Precio recom. (-30%)']
+            sd['Prom/mes'] = sd['Prom/mes'].round(1)
+            st.dataframe(sd, use_container_width=True, hide_index=True, height=300)
+
 
 
 

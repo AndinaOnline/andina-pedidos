@@ -8,11 +8,22 @@ import pandas as pd
 import requests
 from io import BytesIO
 
+def _first_url(val):
+    """WooCommerce puede traer varias URLs separadas por coma; toma la primera."""
+    if not isinstance(val, str):
+        return None
+    for part in val.replace('\n', ',').split(','):
+        p = part.strip()
+        if p.startswith('http'):
+            return p
+    return None
+
 _IMG_CACHE = {}
 def _fetch_img_bytes(url):
     """Descarga la foto del producto y la devuelve como PNG en bytes (cacheada).
-    Si falla (sin red, URL inválida), devuelve None y el PDF sigue sin imagen."""
-    if not (isinstance(url, str) and url.startswith('http')):
+    Si falla (sin red, URL inválida), devuelve None y el PDF muestra un link."""
+    url = _first_url(url)
+    if not url:
         return None
     if url in _IMG_CACHE:
         return _IMG_CACHE[url]
@@ -45,6 +56,7 @@ def _s(text) -> str:
 GRIS = (96, 96, 96)
 BLANCO = (255, 255, 255)
 VERDE_AGUA = (234, 237, 232)
+TERRA = (217, 147, 82)
 
 
 class AndinaPDF(FPDF):
@@ -54,26 +66,27 @@ class AndinaPDF(FPDF):
         self.set_auto_page_break(auto=True, margin=20)
 
     def header(self):
-        # Black header bar
-        self.set_fill_color(*NEGRO)
+        # Header rosa de marca
+        self.set_fill_color(*ROSA)
         self.rect(0, 0, 210, 28, 'F')
-        # Andina logo (versión rosa sobre barra negra). Fallback a texto si falta.
+        # Logo negro sobre rosa. Fallback a texto si falta.
         import os
-        logo = os.path.join(os.path.dirname(__file__), 'assets', 'andina_logo_rosa.png')
+        logo = os.path.join(os.path.dirname(__file__), 'assets', 'andina_logo.png')
         try:
-            self.image(logo, x=15, y=7, h=14)
+            self.image(logo, x=15, y=6, h=16)
         except Exception:
             self.set_xy(15, 8)
             self.set_font('Helvetica', 'I', 20)
-            self.set_text_color(*ROSA)
+            self.set_text_color(*NEGRO)
             self.cell(80, 12, 'Andina', ln=False)
-        # Right side subtitle
+        # Texto derecha en negro
         self.set_xy(110, 10)
-        self.set_font('Helvetica', '', 9)
-        self.set_text_color(*ARENA)
+        self.set_font('Helvetica', 'B', 9)
+        self.set_text_color(*NEGRO)
         self.cell(85, 6, 'ORDEN DE PEDIDO', align='R', ln=True)
         self.set_xy(110, 16)
         self.set_font('Helvetica', '', 8)
+        self.set_text_color(*NEGRO)
         self.cell(85, 5, 'www.andinaonline.com.ar', align='R')
         self.ln(15)
 
@@ -121,7 +134,7 @@ class AndinaPDF(FPDF):
             self.cell(w, 7, label, border=0, fill=True)
         self.ln()
 
-    def table_row(self, img_bytes, sku, nombre, sku_prov, desc_prov, cant, precio, subtotal, shade=False):
+    def table_row(self, img_bytes, img_url, sku, nombre, sku_prov, desc_prov, cant, precio, subtotal, shade=False):
         h = 16
         x0, y0 = 15, self.get_y()
         if y0 + h > 280:                      # salto de página
@@ -134,7 +147,12 @@ class AndinaPDF(FPDF):
             try:
                 self.image(BytesIO(img_bytes), x=x0 + 2, y=y0 + 2, w=16, h=12)
             except Exception:
-                pass
+                img_bytes = None
+        if not img_bytes and img_url:        # link clickeable si no se pudo embeber
+            self.set_xy(x0 + 1, y0 + (h - 5) / 2)
+            self.set_font('Helvetica', 'U', 7)
+            self.set_text_color(*TERRA)
+            self.cell(18, 5, 'Ver foto', link=img_url)
 
         def txt(x, w, s, align='L', bold=False, color=GRIS):
             self.set_xy(x, y0 + (h - 5) / 2)
@@ -192,6 +210,7 @@ def generate_pdf(pedido_df: pd.DataFrame, proveedor: str, edited_qtys: dict = No
         subtotal = qty * costo if (costo and not pd.isna(costo)) else None
         rows_data.append({
             'img': _fetch_img_bytes(row.get('Imagen_url', None)),
+            'img_url': _first_url(row.get('Imagen_url', None)),
             'sku': _s(sku),
             'nombre': _s(str(row.get('Nombre', ''))[:32]),
             'sku_prov': _s(str(row.get('SKU_Prov', '') or '')),
@@ -208,7 +227,7 @@ def generate_pdf(pedido_df: pd.DataFrame, proveedor: str, edited_qtys: dict = No
     
     for i, r in enumerate(rows_data):
         pdf.table_row(
-            r['img'], r['sku'], r['nombre'], r['sku_prov'], r['desc_prov'],
+            r['img'], r['img_url'], r['sku'], r['nombre'], r['sku_prov'], r['desc_prov'],
             r['qty'], r['precio'], r['subtotal'], shade=(i % 2 == 0)
         )
     

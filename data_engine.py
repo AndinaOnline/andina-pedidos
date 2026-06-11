@@ -182,8 +182,8 @@ def load_inventory(file) -> pd.DataFrame:
         if 'pulsera' in cat or 'brazalete' in cat or sku[:2] in ('PU','BR'): return 'Pulsera'
         if 'anillo' in cat or sku[:2] == 'AN': return 'Anillo'
         if 'aro' in cat or sku[:2] == 'AR': return 'Aro'
-        if 'collar largo' in cat or sku[:2] == 'LC': return 'Collar Largo'
-        if 'gargantilla' in cat or 'collar' in cat or sku[:2] == 'CO': return 'Gargantilla'
+        if 'collar largo' in cat or sku[:2] == 'LC': return 'Collares'
+        if 'gargantilla' in cat or 'collar' in cat or sku[:2] == 'CO': return 'Collares'
         if 'conjunto' in cat or sku[:2] in ('CS','CJ'): return 'Conjunto'
         if 'accesorio' in cat or sku[:2] == 'AC': return 'Accesorio'
         return 'Accesorio'
@@ -473,7 +473,7 @@ def build_analysis_df(
             row['SKU'], row['Inventario'], row['Prom_mensual'],
             params['lt'], params['cob'])
     
-    df['Pedido_propuesto'] = df.apply(get_pedido, axis=1)
+    df['Pedido_propuesto'] = 0  # se calcula más abajo, con cobertura de 1 mes
     
     # Forecast Jun/Jul
     prov_sku_ytd = {}
@@ -496,6 +496,32 @@ def build_analysis_df(
     fcst = compute_forecast(jun_total, jul_total, prov_mix, prov_sku_ytd)
     df['Fcst_Jun'] = df['SKU'].map(lambda s: fcst.get(s, {}).get('jun', 0))
     df['Fcst_Jul'] = df['SKU'].map(lambda s: fcst.get(s, {}).get('jul', 0))
+
+    # Pedido propuesto = cubrir 4 SEMANAS móviles desde hoy.
+    # Demanda = saldo del forecast del mes en curso + fracción del mes siguiente
+    # necesaria para completar 28 días (stock objetivo máx. ~1 mes).
+    import calendar
+    _hoy = datetime.now()
+    _dim = calendar.monthrange(_hoy.year, _hoy.month)[1]
+    _days_left = max(0, _dim - _hoy.day)            # días que quedan del mes (sin contar hoy)
+    _cover_cur = min(_days_left, 28)
+    _frac_cur = _cover_cur / _dim
+    _need_next = 28 - _cover_cur
+    _nm = _hoy.month % 12 + 1
+    _ny = _hoy.year + (1 if _hoy.month == 12 else 0)
+    _dim_next = calendar.monthrange(_ny, _nm)[1]
+    _frac_next = _need_next / _dim_next
+
+    def get_pedido_4sem(row):
+        if row['Estado'] in ('BAJA', 'Borrador', 'SALE'):
+            return 0
+        if row['Prior'] not in ('A', 'B') and not row['Es_nuevo']:
+            return 0
+        base_cur = row['Fcst_Jun'] if row['Fcst_Jun'] and row['Fcst_Jun'] > 0 else row['Prom_mensual']
+        base_next = row['Fcst_Jul'] if row['Fcst_Jul'] and row['Fcst_Jul'] > 0 else row['Prom_mensual']
+        demanda = base_cur * _frac_cur + base_next * _frac_next
+        return int(max(0, round(demanda - row['Inventario'])))
+    df['Pedido_propuesto'] = df.apply(get_pedido_4sem, axis=1)
     
     # Alert type
     def get_alerta(row):

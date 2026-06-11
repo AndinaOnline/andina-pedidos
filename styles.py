@@ -23,7 +23,8 @@ CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700&display=swap');
 
-.stApp {{ background: #FFFFFF; }}
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"],
+.main, [data-testid="stMain"], .block-container {{ background: #FFFFFF !important; }}
 html, body, [class*="css"] {{
     font-family: 'Raleway', sans-serif;
     color: {COLORS['texto']};
